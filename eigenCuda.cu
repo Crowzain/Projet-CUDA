@@ -41,7 +41,7 @@ static double pythag(double a, double b)
 	else return (absb == 0.0 ? 0.0 : absb * sqrt(1.0 + SQR(absa / absb)));
 }
 
-void tridiag(double *a, int n, double *d, double *e)
+__device__ void tridiag(double *a, int n, double *d, double *e)
 {
 	int    l, k, j, i;
 	double scale, hh, h, g, f;
@@ -116,7 +116,7 @@ void tridiag(double *a, int n, double *d, double *e)
 
 /* calculate the eigenvalues and eigenvectors of a symmetric tridiagonal matrix */
 //int eigstm(double *d, double *e, int n, double *z)
-int eigstm(double *d, double *e, int n)
+__global__ void eigstm(double *d, double *e, int n)
 {
 	int     m, l, iter, i, k;
 	double  s, r, p, g, f, dd, c, b;
