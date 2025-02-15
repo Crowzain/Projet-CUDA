@@ -116,12 +116,20 @@ __device__ void tridiag(double *a, int n, double *d, double *e)
 
 /* calculate the eigenvalues and eigenvectors of a symmetric tridiagonal matrix */
 //int eigstm(double *d, double *e, int n, double *z)
+
+
+//d corresponds to the elements on the main diagonal
+//e corresponds to the elements on the second diagonal
+//n size of the matrix
+
 __global__ void eigstm(double *d, double *e, int n)
 {
 	int     m, l, iter, i, k;
 	double  s, r, p, g, f, dd, c, b;
-
-	for (i = 1; i < n; i++)
+	
+	unsigned int tid = threadIdx.x;
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+	if (i && i<n-1)
 		e[i - 1] = e[i];
 	e[n - 1] = 0.0;
 	for (l = 0; l < n; l++) {
@@ -133,7 +141,7 @@ __global__ void eigstm(double *d, double *e, int n)
 					break;
 			}
 			if (m != l) {
-				if (iter++ == 30) return(-1);
+				if (iter++ == 30) return;
 				g = (d[l + 1] - d[l]) / (2.0 * e[l]);
 				r = pythag(g, 1.0);
 				g = d[m] - d[l] + e[l] / (g + SIGN(r, g));
@@ -172,7 +180,7 @@ __global__ void eigstm(double *d, double *e, int n)
 		} while (m != l);
 	}
 	qsort(d,n,sizeof(double),compdouble);
-        return (0);
+        //return (0);
 }
 
  
