@@ -351,7 +351,7 @@
         For a 5x5 matrix, each thread requires 25*8 = 200 bytes.
         With 64 threads per block, that’s 64*200 = 12800 bytes (well within limits).
      */
-     int threadsPerBlock = 128;
+     int threadsPerBlock = 64;
      int blocks = (numMatrices + threadsPerBlock - 1) / threadsPerBlock;
      size_t sharedBytes = threadsPerBlock * n * n * sizeof(double);
  
@@ -382,7 +382,7 @@
          }
          printf("\n");
      }
-     FILE *f_eigen = fopen("Data/valpropres.txt","r");
+     FILE *f_eigen = fopen("./valprop1M.txt","r");
      if(!f_eigen){
          perror("couldn't open file!\n");
          exit(EXIT_FAILURE);
