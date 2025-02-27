@@ -648,7 +648,7 @@ int main(int argc, char *argv[])
                     fprintf(stderr, "Error reading eigen_value at index %d\n", j);
                     exit(EXIT_FAILURE);
                 }
-                error += fabs(eigen - h_eigs_cpu[j]);
+                error += fabs(eigen - h_eigs_gpu[j]);
             }
             fclose(f_eigen);
             printf("Total error compared to reference: %.14f\n", error);
