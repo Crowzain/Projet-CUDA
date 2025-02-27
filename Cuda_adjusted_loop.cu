@@ -32,7 +32,7 @@
 const int n = 5;
 
 // Number of streams for overlapping transfers and kernel execution.
-#define NUM_STREAMS 1
+#define NUM_STREAMS 25
 
 /* -------------------- Host Utility Functions -------------------- */
 // Returns current time in milliseconds.
@@ -432,9 +432,9 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Usage: %s <matrix_file.txt> \n", argv[0]);
         exit(EXIT_FAILURE);
     }
-    FILE *metrics128 = fopen("metrics_128threadsPerBlock.csv", "a");
+    FILE *metrics = fopen("occupancyStream_64_threadsPerBlock.csv", "a");
 
-    if(!metrics128){
+    if(!metrics){
         fprintf(stderr, "Error opening file\n");
         exit(EXIT_FAILURE);
     }
@@ -442,7 +442,6 @@ int main(int argc, char *argv[])
     const char *filename = argv[1];
 
     int lineCount = countLines(filename);
-    lineCount = (argc == 4 && n*atoi(argv[3])<lineCount?n*atoi(argv[3]):lineCount);
     if (lineCount % n != 0)
     {
         fprintf(stderr, "File format error: number of lines (%d) is not a multiple of %d\n", lineCount, n);
@@ -479,7 +478,7 @@ int main(int argc, char *argv[])
     cudaMemcpy(h_A_gpu, h_A_cpu, totalMatrixSize, cudaMemcpyHostToHost);
     size_t totalEigSize = numMatrices * n * sizeof(double);
     /* --------------------- Host Computation --------------------- */
-    printf("\n------ Host ------\n");
+/*     printf("\n------ Host ------\n");
     double *h_eigs_cpu;
     int N = n * n;
     h_eigs_cpu = (double *)malloc(totalEigSize * sizeof(double));
@@ -516,8 +515,6 @@ int main(int argc, char *argv[])
             }
             fclose(f_eigen);
             printf("Total error compared to reference: %.14f\n", error);
-            fprintf(metrics128, "%d;", numMatrices);
-            fprintf(metrics128, "%f;", error);
         }
         else
         {
@@ -527,14 +524,11 @@ int main(int argc, char *argv[])
     
     double throughput = numMatrices / (t_cpu / 1000.0);
     double avgLatency = t_cpu / numMatrices;
-    
 
-    fprintf(metrics128, "%f;", t_cpu);
-    fprintf(metrics128, "%f;", throughput);
 
     printf("Throughput: %.2f matrices/second\n", throughput);
     printf("Average latency per matrix: %.4f ms\n", avgLatency);
-
+ */
     /* -------------------- Device Computation -------------------- */
     printf("\n------ Device ------\n");
     double *h_eigs_gpu;
@@ -568,7 +562,7 @@ int main(int argc, char *argv[])
     }
 
     float occupancyVector[NUM_STREAMS] = {0};
-    start = getTimeInMs();
+    double start = getTimeInMs();
 
     int chunkSize = (numMatrices + NUM_STREAMS - 1) / NUM_STREAMS;
     for (int s = 0; s < NUM_STREAMS; s++)
@@ -616,11 +610,14 @@ int main(int argc, char *argv[])
     double t_gpu = getTimeInMs() - start;
     printf("Total GPU processing time for %d matrices (n=%d): %f ms\n", numMatrices, n, t_gpu);
 
-    throughput = numMatrices / (t_gpu / 1000.0);
-    avgLatency = t_gpu / numMatrices;
+    double throughput = numMatrices / (t_gpu / 1000.0);
+    double avgLatency = t_gpu / numMatrices;
     
-    fprintf(metrics128, "%f;", t_gpu);
-    fprintf(metrics128, "%f;", throughput);
+    fprintf(metrics, "%d;", NUM_STREAMS);
+    fprintf(metrics, "%f;", t_gpu);
+    fprintf(metrics, "%f;", throughput);
+    fprintf(metrics, "%f;", avgLatency);
+    fprintf(metrics, "%f\n", occupancyVector[0]);
 
     int activeBlocksPerSM;
     cudaOccupancyMaxActiveBlocksPerMultiprocessor(&activeBlocksPerSM, eigstm_kernel, optimalBlockSize, sharedBytes);
@@ -667,20 +664,19 @@ int main(int argc, char *argv[])
                     fprintf(stderr, "Error reading eigen_value at index %d\n", j);
                     exit(EXIT_FAILURE);
                 }
-                error += fabs(eigen - h_eigs_cpu[j]);
+                error += fabs(eigen - h_eigs_gpu[j]);
             }
             fclose(f_eigen);
             printf("Total error compared to reference: %.14f\n", error);
-            fprintf(metrics128, "%f\n", error);
         }
         else
         {
             fprintf(stderr, "Reference eigenvalue file (Data/valprop1M.txt) not found.\n");
         }
     }
-    fclose(metrics128);
-    printf("\n------ Summary ------\n");
-    printf("Elapsed time ratio (t_CPU/t_GPU): %.3lf\n", t_cpu / t_gpu);
+    fclose(metrics);
+/*     printf("\n------ Summary ------\n");
+    printf("Elapsed time ratio (t_CPU/t_GPU): %.3lf\n", t_cpu / t_gpu); */
     free(h_A_cpu);
     cudaFreeHost(h_A_gpu);
     cudaFreeHost(h_eigs_gpu);
