@@ -432,9 +432,17 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Usage: %s <matrix_file.txt> \n", argv[0]);
         exit(EXIT_FAILURE);
     }
+    FILE *metrics128 = fopen("metrics_128threadsPerBlock.csv", "a");
+
+    if(!metrics128){
+        fprintf(stderr, "Error opening file\n");
+        exit(EXIT_FAILURE);
+    }
+
     const char *filename = argv[1];
 
     int lineCount = countLines(filename);
+    lineCount = (argc == 4 && n*atoi(argv[3])<lineCount?n*atoi(argv[3]):lineCount);
     if (lineCount % n != 0)
     {
         fprintf(stderr, "File format error: number of lines (%d) is not a multiple of %d\n", lineCount, n);
@@ -489,7 +497,7 @@ int main(int argc, char *argv[])
 
     double t_cpu = getTimeInMs() - start;
     fprintf(stdout, "CPU execution time: %f ms\n", t_cpu);
-    if (argc == 3)
+    if (argc >= 3)
     {
         f_eigen = fopen(argv[2], "r");
         if (f_eigen)
@@ -508,14 +516,21 @@ int main(int argc, char *argv[])
             }
             fclose(f_eigen);
             printf("Total error compared to reference: %.14f\n", error);
+            fprintf(metrics128, "%d;", numMatrices);
+            fprintf(metrics128, "%f;", error);
         }
         else
         {
             fprintf(stderr, "Reference eigenvalue file (Data/valprop1M.txt) not found.\n");
         }
     }
+    
     double throughput = numMatrices / (t_cpu / 1000.0);
     double avgLatency = t_cpu / numMatrices;
+    
+
+    fprintf(metrics128, "%f;", t_cpu);
+    fprintf(metrics128, "%f;", throughput);
 
     printf("Throughput: %.2f matrices/second\n", throughput);
     printf("Average latency per matrix: %.4f ms\n", avgLatency);
@@ -603,6 +618,9 @@ int main(int argc, char *argv[])
 
     throughput = numMatrices / (t_gpu / 1000.0);
     avgLatency = t_gpu / numMatrices;
+    
+    fprintf(metrics128, "%f;", t_gpu);
+    fprintf(metrics128, "%f;", throughput);
 
     int activeBlocksPerSM;
     cudaOccupancyMaxActiveBlocksPerMultiprocessor(&activeBlocksPerSM, eigstm_kernel, optimalBlockSize, sharedBytes);
@@ -619,6 +637,7 @@ int main(int argc, char *argv[])
     }
     printf("Throughput: %.2f matrices/second\n", throughput);
     printf("Average latency per matrix: %.4f ms\n", avgLatency);
+    
 
     printf("\nFirst few matrices eigenvalues (GPU):\n");
     int displayCount = (numMatrices < 5 ? numMatrices : 5);
@@ -633,7 +652,7 @@ int main(int argc, char *argv[])
     }
 
     f_eigen = fopen("./valprop1M.txt", "r");
-    if (argc == 3)
+    if (argc >= 3)
     {
         f_eigen = fopen(argv[2], "r");
         if (f_eigen)
@@ -652,12 +671,14 @@ int main(int argc, char *argv[])
             }
             fclose(f_eigen);
             printf("Total error compared to reference: %.14f\n", error);
+            fprintf(metrics128, "%f\n", error);
         }
         else
         {
             fprintf(stderr, "Reference eigenvalue file (Data/valprop1M.txt) not found.\n");
         }
     }
+    fclose(metrics128);
     printf("\n------ Summary ------\n");
     printf("Elapsed time ratio (t_CPU/t_GPU): %.3lf\n", t_cpu / t_gpu);
     free(h_A_cpu);
