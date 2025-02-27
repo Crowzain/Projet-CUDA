@@ -32,7 +32,7 @@
 const int n = 5;
 
 // Number of streams for overlapping transfers and kernel execution.
-#define NUM_STREAMS 25
+#define NUM_STREAMS 1
 
 /* -------------------- Host Utility Functions -------------------- */
 // Returns current time in milliseconds.
@@ -426,19 +426,12 @@ __global__ void eigstm_kernel(const double *__restrict__ d_A, double *__restrict
 /* -------------------- Host Main Function -------------------- */
 int main(int argc, char *argv[])
 {
-    FILE *f_eigen;
+    //FILE *f_eigen;
     if (argc < 2)
     {
         fprintf(stderr, "Usage: %s <matrix_file.txt> \n", argv[0]);
         exit(EXIT_FAILURE);
     }
-    FILE *metrics = fopen("occupancyStream_64_threadsPerBlock.csv", "a");
-
-    if(!metrics){
-        fprintf(stderr, "Error opening file\n");
-        exit(EXIT_FAILURE);
-    }
-
     const char *filename = argv[1];
 
     int lineCount = countLines(filename);
@@ -452,10 +445,10 @@ int main(int argc, char *argv[])
     printf("Number of matrices in file: %d\n", numMatrices);
 
     size_t totalMatrixSize = numMatrices * n * n * sizeof(double);
-    double *h_A_cpu;
+    double *h_A;
     double *h_A_gpu;
-    h_A_cpu = (double *)malloc(totalMatrixSize);
-    cudaHostAlloc((void **)&h_A_gpu, totalMatrixSize, cudaHostAllocDefault);
+    double *h_eigs_gpu;
+    h_A = (double *)malloc(totalMatrixSize);
     FILE *fin = fopen(filename, "r");
     if (!fin)
     {
@@ -466,7 +459,7 @@ int main(int argc, char *argv[])
     {
         for (int i = 0; i < n * n; i++)
         {
-            if (fscanf(fin, "%lf", &h_A_cpu[m * n * n + i]) != 1)
+            if (fscanf(fin, "%lf", &h_A[m * n * n + i]) != 1)
             {
                 fprintf(stderr, "Error reading matrix %d element %d\n", m, i);
                 exit(EXIT_FAILURE);
@@ -474,11 +467,13 @@ int main(int argc, char *argv[])
         }
     }
     fclose(fin);
-
-    cudaMemcpy(h_A_gpu, h_A_cpu, totalMatrixSize, cudaMemcpyHostToHost);
+    
     size_t totalEigSize = numMatrices * n * sizeof(double);
+    cudaHostAlloc((void **)&h_A_gpu, totalMatrixSize, cudaHostAllocDefault);
+    cudaHostAlloc((void **)&h_eigs_gpu, totalEigSize, cudaHostAllocDefault);
+    //cudaMemcpy(h_A_gpu, h_A_cpu, totalMatrixSize, cudaMemcpyHostToHost);
     /* --------------------- Host Computation --------------------- */
-/*     printf("\n------ Host ------\n");
+    /* printf("\n------ Host ------\n");
     double *h_eigs_cpu;
     int N = n * n;
     h_eigs_cpu = (double *)malloc(totalEigSize * sizeof(double));
@@ -496,7 +491,7 @@ int main(int argc, char *argv[])
 
     double t_cpu = getTimeInMs() - start;
     fprintf(stdout, "CPU execution time: %f ms\n", t_cpu);
-    if (argc >= 3)
+    if (argc == 3)
     {
         f_eigen = fopen(argv[2], "r");
         if (f_eigen)
@@ -521,18 +516,16 @@ int main(int argc, char *argv[])
             fprintf(stderr, "Reference eigenvalue file (Data/valprop1M.txt) not found.\n");
         }
     }
-    
     double throughput = numMatrices / (t_cpu / 1000.0);
     double avgLatency = t_cpu / numMatrices;
-
 
     printf("Throughput: %.2f matrices/second\n", throughput);
     printf("Average latency per matrix: %.4f ms\n", avgLatency);
  */
     /* -------------------- Device Computation -------------------- */
     printf("\n------ Device ------\n");
-    double *h_eigs_gpu;
-    cudaHostAlloc((void **)&h_eigs_gpu, totalEigSize, cudaHostAllocDefault);
+    
+    
 
     cudaDeviceProp deviceProp;
     cudaGetDeviceProperties(&deviceProp, 0);
@@ -561,63 +554,63 @@ int main(int argc, char *argv[])
         cudaStreamCreate(&streams[i]);
     }
 
-    float occupancyVector[NUM_STREAMS] = {0};
-    double start = getTimeInMs();
-
     int chunkSize = (numMatrices + NUM_STREAMS - 1) / NUM_STREAMS;
-    for (int s = 0; s < NUM_STREAMS; s++)
-    {
+    int streamChunkSizes[NUM_STREAMS];
+    size_t chunkMatrixBytes[NUM_STREAMS];
+    size_t chunkEigBytes[NUM_STREAMS];
+    double *d_A_chunks[NUM_STREAMS];
+    double *d_eigs_chunks[NUM_STREAMS];
+
+    for (int s = 0; s < NUM_STREAMS; s++) {
         int startMat = s * chunkSize;
         int endMat = (startMat + chunkSize > numMatrices) ? numMatrices : startMat + chunkSize;
         int numChunk = endMat - startMat;
-        if (numChunk <= 0)
-            continue;
+        streamChunkSizes[s] = numChunk;
+        chunkMatrixBytes[s] = numChunk * n * n * sizeof(double);
+        chunkEigBytes[s]    = numChunk * n * sizeof(double);
 
-        size_t chunkMatrixBytes = numChunk * n * n * sizeof(double);
-        size_t chunkEigBytes = numChunk * n * sizeof(double);
-
-        double *d_A_chunk, *d_eigs_chunk;
-        cudaMalloc((void **)&d_A_chunk, chunkMatrixBytes);
-        cudaMalloc((void **)&d_eigs_chunk, chunkEigBytes);
-
-        cudaMemcpyAsync(d_A_chunk, h_A_gpu + startMat * n * n,
-                        chunkMatrixBytes, cudaMemcpyHostToDevice, streams[s]);
-
-        int blocks = (numChunk + optimalBlockSize - 1) / optimalBlockSize;
-        int activeThreads = blocks * optimalBlockSize;
-        int maxThreadsOverall = deviceProp.maxThreadsPerMultiProcessor * deviceProp.multiProcessorCount;
-        if (activeThreads > maxThreadsOverall)
-            activeThreads = maxThreadsOverall;
-        occupancyVector[s] = ((float)activeThreads / (float)maxThreadsOverall) * 100.0f;
-
-        eigstm_kernel<<<blocks, optimalBlockSize, sharedBytes, streams[s]>>>(d_A_chunk, d_eigs_chunk, n, numChunk);
-
-        cudaMemcpyAsync(h_eigs_gpu + startMat * n, d_eigs_chunk,
-                        chunkEigBytes, cudaMemcpyDeviceToHost, streams[s]);
-
-        // cudaFreeAsync(d_A_chunk, streams[s]);
-        // cudaFreeAsync(d_eigs_chunk, streams[s]);
-        cudaFree(d_A_chunk);
-        cudaFree(d_eigs_chunk);
+        cudaMalloc((void **)&d_A_chunks[s], chunkMatrixBytes[s]);
+        cudaMalloc((void **)&d_eigs_chunks[s], chunkEigBytes[s]);
     }
+
+    double t_gpu = 0;
+    double start;
+
+    for (int j = 0; j<6000; j++){
+        cudaMemcpy(h_A_gpu, h_A, totalMatrixSize, cudaMemcpyHostToHost);
+
+        start = getTimeInMs();
+        for (int s = 0; s < NUM_STREAMS; s++){
+            int startMat = s * chunkSize;
+            // Transfert asynchrone de la matrice du host vers le device pour ce chunk.
+            cudaMemcpyAsync(d_A_chunks[s], h_A_gpu + startMat * n * n,
+                            chunkMatrixBytes[s], cudaMemcpyHostToDevice, streams[s]);
+
+            int blocks = (streamChunkSizes[s] + optimalBlockSize - 1) / optimalBlockSize;
+            eigstm_kernel<<<blocks, optimalBlockSize, sharedBytes, streams[s]>>>(d_A_chunks[s], d_eigs_chunks[s], n, streamChunkSizes[s]);
+
+            // Transfert asynchrone du résultat vers le host.
+            cudaMemcpyAsync(h_eigs_gpu + startMat * n, d_eigs_chunks[s],
+                            chunkEigBytes[s], cudaMemcpyDeviceToHost, streams[s]);
+        }
+        // Synchronisation de tous les streams pour s'assurer que l'itération est terminée.
+        for (int s = 0; s < NUM_STREAMS; s++){
+            cudaStreamSynchronize(streams[s]);
+        }
+        t_gpu += (getTimeInMs() - start);
+        }
 
     for (int s = 0; s < NUM_STREAMS; s++)
-    {
-        cudaStreamSynchronize(streams[s]);
-        cudaStreamDestroy(streams[s]);
-    }
-
-    double t_gpu = getTimeInMs() - start;
+        {
+            //cudaStreamSynchronize(streams[s]);
+            cudaFree(d_A_chunks[s]);
+            cudaFree(d_eigs_chunks[s]);
+            cudaStreamDestroy(streams[s]);
+        }
     printf("Total GPU processing time for %d matrices (n=%d): %f ms\n", numMatrices, n, t_gpu);
 
-    double throughput = totalEigSize / (t_gpu / 1000.0);
-    double avgLatency = t_gpu / numMatrices;
-    
-    fprintf(metrics, "%d;", NUM_STREAMS);
-    fprintf(metrics, "%f;", t_gpu);
-    fprintf(metrics, "%f;", throughput);
-    fprintf(metrics, "%f;", avgLatency);
-    fprintf(metrics, "%f\n", occupancyVector[0]);
+    double throughput = numMatrices*5000 / (t_gpu / 1000.0);
+    double avgLatency = t_gpu / (numMatrices*5000);
 
     int activeBlocksPerSM;
     cudaOccupancyMaxActiveBlocksPerMultiprocessor(&activeBlocksPerSM, eigstm_kernel, optimalBlockSize, sharedBytes);
@@ -627,18 +620,19 @@ int main(int argc, char *argv[])
 
     printf("\n--- Performance Metrics ---\n");
     printf("Overall theoretical occupancy: %.2f%%\n", overallOccupancy);
+    /*     
     printf("Per-chunk occupancy (vector):\n");
     for (int s = 0; s < NUM_STREAMS; s++)
     {
         printf("  Stream %d: %.2f%%\n", s, occupancyVector[s]);
-    }
+    } */
     printf("Throughput: %.2f matrices/second\n", throughput);
     printf("Average latency per matrix: %.4f ms\n", avgLatency);
-    
 
     printf("\nFirst few matrices eigenvalues (GPU):\n");
+    /*
     int displayCount = (numMatrices < 5 ? numMatrices : 5);
-    for (int m = 0; m < displayCount; m++)
+     for (int m = 0; m < displayCount; m++)
     {
         printf("Matrix %d eigenvalues:\n", m);
         for (int i = 0; i < n; i++)
@@ -646,10 +640,10 @@ int main(int argc, char *argv[])
             printf("%f  ", h_eigs_gpu[m * n + i]);
         }
         printf("\n");
-    }
-
+    } 
+    
     f_eigen = fopen("./valprop1M.txt", "r");
-    if (argc >= 3)
+    if (argc == 3)
     {
         f_eigen = fopen(argv[2], "r");
         if (f_eigen)
@@ -674,10 +668,10 @@ int main(int argc, char *argv[])
             fprintf(stderr, "Reference eigenvalue file (Data/valprop1M.txt) not found.\n");
         }
     }
-    fclose(metrics);
-/*     printf("\n------ Summary ------\n");
-    printf("Elapsed time ratio (t_CPU/t_GPU): %.3lf\n", t_cpu / t_gpu); */
-    free(h_A_cpu);
+    */
+    //printf("\n------ Summary ------\n");
+    //printf("Elapsed time ratio (t_CPU/t_GPU): %.3lf\n", t_cpu / t_gpu);
+    //free(h_A_cpu);
     cudaFreeHost(h_A_gpu);
     cudaFreeHost(h_eigs_gpu);
 
